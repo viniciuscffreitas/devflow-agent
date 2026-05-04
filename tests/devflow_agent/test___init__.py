@@ -4,7 +4,7 @@ import devflow_agent
 
 
 def test_version_is_set():
-    assert devflow_agent.__version__ == "0.1.0"
+    assert devflow_agent.__version__ == "0.2.0"
 
 
 def test_version_is_string():

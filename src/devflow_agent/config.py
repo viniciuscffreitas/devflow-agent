@@ -1,38 +1,21 @@
 """High-level entry point: build a wired ClaudeAgentOptions for an unattended run.
 
-Caller (Symphony orchestrator, CI runner, anything driving claude-agent-sdk
-without a human) does::
+Two public entry points:
 
-    options, session_id = await build_options(
-        issue=IssueContext(identifier="SODEV-789", title="...", url="..."),
-        cwd=Path("/path/to/repo-clone"),
-        devflow_root=Path("/path/to/devflow-lite"),
-        policy=Policy.AUTO_DENY,
-        base_system_prompt="...",
-    )
-    async with ClaudeSDKClient(options=options) as client:
-        await client.query(prompt="...")
+- ``compose_devflow_bundle`` — for callers that already build their own
+  ``ClaudeAgentOptions`` (Symphony shim, custom CI runners) and just want the
+  session_id, merged system_prompt and ready-to-attach hooks dict.
+- ``build_options`` — convenience wrapper that constructs a minimal
+  ``ClaudeAgentOptions`` for callers without their own SDK plumbing.
 
-What this wires:
-
-1. Generates a fresh ``session_id`` (UUID4) — devflow hooks key state on it.
-2. Writes the ``IMPLEMENTING`` marker via spec_seed.
-3. Runs SessionStart-equivalent bootstrap hooks and folds their context into
-   ``system_prompt``.
-4. Builds ``HookMatcher`` lists for PreToolUse / PostToolUse / Stop / PreCompact
-   pointing at the real lite hooks (skipping UserPromptSubmit — the agent has
-   no user prompt) and the destructive-op policy callback.
-
-What this does NOT do:
-
-- Set ``permission_mode``. Caller picks (``"acceptEdits"``,
-  ``"bypassPermissions"``, ...) based on their trust level for the run.
-- Provide tools or MCP servers. Caller adds those.
+Caller picks ``permission_mode``, MCP servers, env, disallowed_tools — those
+are caller-specific and not the harness's concern.
 """
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +32,15 @@ _STOP_HOOKS = ("stop_dispatcher",)
 _PRE_COMPACT_HOOKS = ("pre_compact",)
 
 
+@dataclass(frozen=True)
+class DevflowBundle:
+    """Pre-wired devflow pieces ready to merge into caller's ClaudeAgentOptions."""
+
+    session_id: str
+    system_prompt: str | None
+    hooks: dict[str, list[Any]]
+
+
 def _hook_matcher(matcher: str, callback: Any, timeout: float | None = 60) -> Any:
     """Lazy import HookMatcher so importing devflow_agent.config doesn't require SDK."""
     from claude_agent_sdk import HookMatcher
@@ -56,18 +48,21 @@ def _hook_matcher(matcher: str, callback: Any, timeout: float | None = 60) -> An
     return HookMatcher(matcher=matcher, hooks=[callback], timeout=timeout)
 
 
-async def build_options(
+async def compose_devflow_bundle(
     *,
     issue: IssueContext,
     cwd: Path,
     devflow_root: Path,
     policy: Policy,
-    base_system_prompt: str,
+    base_system_prompt: str = "",
     bootstrap_hooks: tuple[str, ...] = DEFAULT_BOOTSTRAP_HOOKS,
-) -> tuple[Any, str]:
-    """Return ``(ClaudeAgentOptions, session_id)`` for an unattended run."""
-    from claude_agent_sdk import ClaudeAgentOptions
+) -> DevflowBundle:
+    """Materialise the IMPLEMENTING marker, run bootstrap hooks, build hook table.
 
+    Returns a :class:`DevflowBundle` the caller plugs into its own
+    :class:`ClaudeAgentOptions`. ``state_root`` always equals ``devflow_root``
+    — devflow-lite hooks resolve state under ``DEVFLOW_ROOT/state/``.
+    """
     cwd = Path(cwd).resolve()
     devflow_root = Path(devflow_root).resolve()
     hooks_dir = devflow_root / "hooks"
@@ -113,9 +108,32 @@ async def build_options(
         "PreCompact": [_hook_matcher("", _bridge(_PRE_COMPACT_HOOKS))],
     }
 
-    options = ClaudeAgentOptions(
-        hooks=hooks,
-        system_prompt=system_prompt,
-        cwd=str(cwd),
+    return DevflowBundle(session_id=session_id, system_prompt=system_prompt, hooks=hooks)
+
+
+async def build_options(
+    *,
+    issue: IssueContext,
+    cwd: Path,
+    devflow_root: Path,
+    policy: Policy,
+    base_system_prompt: str,
+    bootstrap_hooks: tuple[str, ...] = DEFAULT_BOOTSTRAP_HOOKS,
+) -> tuple[Any, str]:
+    """Return ``(ClaudeAgentOptions, session_id)`` for an unattended run."""
+    from claude_agent_sdk import ClaudeAgentOptions
+
+    bundle = await compose_devflow_bundle(
+        issue=issue,
+        cwd=cwd,
+        devflow_root=devflow_root,
+        policy=policy,
+        base_system_prompt=base_system_prompt,
+        bootstrap_hooks=bootstrap_hooks,
     )
-    return options, session_id
+    options = ClaudeAgentOptions(
+        hooks=bundle.hooks,
+        system_prompt=bundle.system_prompt,
+        cwd=str(Path(cwd).resolve()),
+    )
+    return options, bundle.session_id

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from devflow_agent.config import build_options
+from devflow_agent.config import DevflowBundle, build_options, compose_devflow_bundle
 from devflow_agent.policy import Policy
 from devflow_agent.spec_seed import IssueContext
 
@@ -102,3 +102,44 @@ async def test_build_options_resolves_correct_hook_groups(tmp_path: Path):
     assert len(post_tool) >= 1
     assert len(stop) == 1
     assert len(pre_compact) == 1
+
+
+@pytest.mark.asyncio
+async def test_compose_devflow_bundle_returns_pieces_for_caller_owned_options(
+    tmp_path: Path,
+):
+    """Caller-side composition path: bundle has session_id + system_prompt + hooks."""
+    _seed_lite(tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    issue = IssueContext(identifier="C-1", title="compose", url="")
+    bundle = await compose_devflow_bundle(
+        issue=issue,
+        cwd=repo,
+        devflow_root=tmp_path,
+        policy=Policy.AUTO_DENY,
+        base_system_prompt="caller prompt",
+    )
+    assert isinstance(bundle, DevflowBundle)
+    assert isinstance(bundle.session_id, str) and bundle.session_id
+    assert "caller prompt" in (bundle.system_prompt or "")
+    assert set(bundle.hooks.keys()) == {"PreToolUse", "PostToolUse", "Stop", "PreCompact"}
+    marker = tmp_path / "state" / bundle.session_id / "active-spec.json"
+    assert marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_compose_devflow_bundle_no_base_prompt_returns_none_or_contexts(
+    tmp_path: Path,
+):
+    """When base_system_prompt='' and bootstrap silent, system_prompt is None."""
+    _seed_lite(tmp_path)
+    issue = IssueContext(identifier="C-2", title="silent", url="")
+    bundle = await compose_devflow_bundle(
+        issue=issue,
+        cwd=tmp_path,
+        devflow_root=tmp_path,
+        policy=Policy.AUTO_DENY,
+        base_system_prompt="",
+    )
+    assert bundle.system_prompt is None
