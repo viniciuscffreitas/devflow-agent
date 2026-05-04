@@ -29,6 +29,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC"]
+# ASYNC240 flags pathlib.Path.resolve() which is a non-blocking os.path call,
+# not async file I/O — the rule is a false-positive for this usage.
+ignore = ["ASYNC240"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
