@@ -44,6 +44,20 @@ _ENV_VAR = "SYMPHONY_PR_BASE_POLICY"
 
 _GITHUB_URL_RE = re.compile(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$")
 
+_DEBUG_LOG = os.environ.get("SYMPHONY_PR_BASE_DEBUG_LOG")
+
+
+def _debug_log_all(input: HookInput, base_cwd: Path | None) -> None:
+    if not _DEBUG_LOG:
+        return
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps({"input": input, "base_cwd": str(base_cwd) if base_cwd else None}) + "\n"
+            )
+    except OSError:
+        pass
+
 
 def _parse_gh_pr_create(command: str) -> dict[str, Any] | None:
     """Extract ``--repo``, ``--base`` and any leading ``cd <dir> &&`` prefix.
@@ -169,6 +183,7 @@ def build_pr_base_branch_callback(
     base_cwd = Path(cwd).resolve() if cwd is not None else None
 
     async def callback(input: HookInput, tool_use_id: str | None, context: dict) -> HookOutput:
+        _debug_log_all(input, base_cwd)
         if input.get("tool_name") != "Bash":
             return {}
         command = (input.get("tool_input") or {}).get("command") or ""
