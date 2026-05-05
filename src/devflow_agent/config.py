@@ -21,6 +21,7 @@ from typing import Any
 
 from devflow_agent.bootstrap import DEFAULT_BOOTSTRAP_HOOKS, collect_session_context
 from devflow_agent.bridge import build_hook_callback
+from devflow_agent.ci_gate_bootstrap import build_ci_gate_callback, sync_ci_gate
 from devflow_agent.policy import Policy, build_policy_callback
 from devflow_agent.pr_base_branch import build_pr_base_branch_callback
 from devflow_agent.spec_seed import IssueContext, mark_implementing
@@ -93,13 +94,17 @@ async def compose_devflow_bundle(
     def _bridge(scripts: tuple[str, ...]) -> Any:
         return build_hook_callback(scripts, hooks_dir=hooks_dir, devflow_root=devflow_root)
 
+    sync_ci_gate(cwd)
+
     policy_cb = build_policy_callback(policy, state_root=state_root)
     pr_base_cb = build_pr_base_branch_callback(cwd=cwd)
+    ci_gate_cb = build_ci_gate_callback(cwd=cwd)
 
     hooks = {
         "PreToolUse": [
             _hook_matcher("Bash", policy_cb),
             _hook_matcher("Bash", pr_base_cb),
+            _hook_matcher("Bash", ci_gate_cb),
             _hook_matcher("Write|Edit|MultiEdit", _bridge(_PRE_TOOL_USE_WRITE_EDIT)),
             _hook_matcher("Bash", _bridge(_PRE_TOOL_USE_BASH)),
         ],
