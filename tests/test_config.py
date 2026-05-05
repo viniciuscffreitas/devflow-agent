@@ -55,6 +55,7 @@ async def test_build_options_returns_claude_agent_options(tmp_path: Path):
         base_system_prompt="You are an agent.",
     )
     from claude_agent_sdk import ClaudeAgentOptions  # noqa: F401
+
     assert isinstance(session_id, str) and session_id
     assert hasattr(options, "hooks")
     assert "PreToolUse" in options.hooks
@@ -98,10 +99,12 @@ async def test_build_options_resolves_correct_hook_groups(tmp_path: Path):
     post_tool = options.hooks["PostToolUse"]
     stop = options.hooks["Stop"]
     pre_compact = options.hooks["PreCompact"]
-    assert len(pre_tool) >= 1
+    assert len(pre_tool) >= 4  # policy + pr_base_branch + write/edit + bash bridge
     assert len(post_tool) >= 1
     assert len(stop) == 1
     assert len(pre_compact) == 1
+    bash_matchers = [m for m in pre_tool if m.matcher == "Bash"]
+    assert len(bash_matchers) >= 3  # policy_cb, pr_base_cb, bridge BASH
 
 
 @pytest.mark.asyncio
