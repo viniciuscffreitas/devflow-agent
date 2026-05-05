@@ -94,7 +94,7 @@ async def compose_devflow_bundle(
         return build_hook_callback(scripts, hooks_dir=hooks_dir, devflow_root=devflow_root)
 
     policy_cb = build_policy_callback(policy, state_root=state_root)
-    pr_base_cb = build_pr_base_branch_callback()
+    pr_base_cb = build_pr_base_branch_callback(cwd=cwd)
 
     hooks = {
         "PreToolUse": [

@@ -7,6 +7,9 @@ Soft prompts in WORKFLOW.md don't enforce; this hook does. Symphony loads
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from devflow_agent.pr_base_branch import build_pr_base_branch_callback
@@ -161,12 +164,90 @@ async def test_env_unset_with_no_explicit_policy(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_policy_repo_without_repo_flag_passes_through_with_warning():
-    """Without --repo, hook can't determine target repo — let it pass.
-
-    Symphony branches always use --repo explicitly per workflow prompt; this is
-    a soft fallback so the hook never blocks unrelated gh commands.
-    """
+async def test_no_repo_flag_no_cwd_passes_through():
+    """Without --repo and without cwd, hook can't determine target repo."""
     cb = build_pr_base_branch_callback(policy={"schoolsoutapp/schools-out": "dev"})
+    response = await cb(_input("gh pr create --base main --title x"), None, {})
+    assert response == {}
+
+
+def _init_repo_with_origin(path: Path, origin_url: str) -> None:
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "remote", "add", "origin", origin_url],
+        check=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cwd_fallback_detects_repo_and_denies_wrong_base(tmp_path: Path):
+    _init_repo_with_origin(tmp_path, "git@github.com:schoolsoutapp/schools-out.git")
+    cb = build_pr_base_branch_callback(
+        policy={"schoolsoutapp/schools-out": "dev"}, cwd=tmp_path
+    )
+    response = await cb(_input("gh pr create --base main --title x"), None, {})
+    decision = response["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "schoolsoutapp/schools-out" in decision["permissionDecisionReason"]
+
+
+@pytest.mark.asyncio
+async def test_cwd_fallback_https_url_detected(tmp_path: Path):
+    _init_repo_with_origin(tmp_path, "https://github.com/schoolsoutapp/schools-out.git")
+    cb = build_pr_base_branch_callback(
+        policy={"schoolsoutapp/schools-out": "dev"}, cwd=tmp_path
+    )
+    response = await cb(_input("gh pr create --title x"), None, {})
+    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.asyncio
+async def test_cwd_fallback_correct_base_passes(tmp_path: Path):
+    _init_repo_with_origin(tmp_path, "https://github.com/schoolsoutapp/schools-out.git")
+    cb = build_pr_base_branch_callback(
+        policy={"schoolsoutapp/schools-out": "dev"}, cwd=tmp_path
+    )
     response = await cb(_input("gh pr create --base dev --title x"), None, {})
+    assert response == {}
+
+
+@pytest.mark.asyncio
+async def test_cd_subdir_resolves_against_workspace_root(tmp_path: Path):
+    """`cd fe-next-app && gh pr create` reads the subdir's git remote."""
+    sub = tmp_path / "fe-next-app"
+    sub.mkdir()
+    _init_repo_with_origin(sub, "https://github.com/schoolsoutapp/fe-next-app.git")
+    _init_repo_with_origin(tmp_path, "https://github.com/schoolsoutapp/schools-out.git")
+    cb = build_pr_base_branch_callback(
+        policy={
+            "schoolsoutapp/schools-out": "dev",
+            "schoolsoutapp/fe-next-app": "dev",
+        },
+        cwd=tmp_path,
+    )
+    response = await cb(
+        _input("cd fe-next-app && gh pr create --base main --title x"), None, {}
+    )
+    decision = response["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "fe-next-app" in decision["permissionDecisionReason"]
+
+
+@pytest.mark.asyncio
+async def test_cwd_fallback_skips_non_github_origin(tmp_path: Path):
+    _init_repo_with_origin(tmp_path, "git@gitlab.com:foo/bar.git")
+    cb = build_pr_base_branch_callback(
+        policy={"schoolsoutapp/schools-out": "dev"}, cwd=tmp_path
+    )
+    response = await cb(_input("gh pr create --base main --title x"), None, {})
+    assert response == {}
+
+
+@pytest.mark.asyncio
+async def test_cwd_fallback_no_origin_remote_passes(tmp_path: Path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)  # noqa: ASYNC221 — short test setup
+    cb = build_pr_base_branch_callback(
+        policy={"schoolsoutapp/schools-out": "dev"}, cwd=tmp_path
+    )
+    response = await cb(_input("gh pr create --base main --title x"), None, {})
     assert response == {}
